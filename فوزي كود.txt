@@ -1,0 +1,114 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <RTClib.h>
+
+// إعداد الشاشة LCD (تأكد من العنوان الصحيح)
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// إعداد وحدة RTC
+RTC_DS1307 rtc;
+
+// تعويض التوقيت المحلي لعمان، الأردن (+3 ساعات)
+const int timezoneOffset = 0;
+
+// إعداد مداخل الأضواء والأزرار
+const int ledPins[] = {2, 3, 4};       // مداخل الأضواء
+const int buttonPins[] = {8, 9, 10};   // مداخل الأزرار المرتبطة بالأضواء
+const int controlBuzzerPin = 12;       // المدخل الخاص بالبزر
+
+int currentLedIndex = 0;               // الضوء الحالي
+unsigned long lastActivationTime = 0;  // وقت آخر تنشيط
+bool isWaiting = false;                // حالة العد التنازلي
+
+void setup() {
+  // تهيئة الشاشة
+  lcd.init();
+  lcd.backlight();
+
+  // تهيئة وحدة RTC
+  if (!rtc.begin()) {
+    lcd.setCursor(0, 0);
+    lcd.print("RTC not found!");
+    while (1); // التوقف إذا لم يتم العثور على وحدة RTC
+  }
+
+  if (!rtc.isrunning()) {
+    lcd.setCursor(0, 1);
+    lcd.print("RTC updating...");
+    rtc.adjust(DateTime(2025, 1, 5, 14, 3, 0)); // ضبط الوقت إلى الساعة 5 مساءً
+  }
+
+  // إعداد مداخل الأضواء كمخارج
+  for (int i = 0; i < 3; i++) {
+    pinMode(ledPins[i], OUTPUT);
+    digitalWrite(ledPins[i], LOW); // إطفاء الأضواء في البداية
+  }
+
+  // إعداد مداخل الأزرار كمداخل
+  for (int i = 0; i < 3; i++) {
+    pinMode(buttonPins[i], INPUT_PULLUP); // تفعيل المقاومة الداخلية
+  }
+
+  // إعداد البزر كمخرج
+  pinMode(controlBuzzerPin, OUTPUT);
+  digitalWrite(controlBuzzerPin, LOW); // إطفاء البزر في البداية
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("System Ready!");
+  delay(2000);
+  lcd.clear();
+}
+
+void loop() {
+  // قراءة الوقت الحالي من RTC
+  DateTime now = rtc.now();
+
+  // حساب الوقت المحلي
+  int localHour = now.hour() + timezoneOffset;
+  if (localHour >= 24) localHour -= 24; // التأكد من أن الساعة لا تتجاوز 24
+  if (localHour < 0) localHour += 24;   // إذا كانت الساعة أقل من 0 (للتوقيت السالب)
+
+  // عرض التاريخ والوقت على الشاشة
+  lcd.setCursor(0, 0);
+  lcd.print("Time: ");
+  lcd.print(localHour);
+  lcd.print(":");
+  lcd.print(now.minute());
+  lcd.print(":");
+  lcd.print(now.second());
+
+  unsigned long currentTime = millis();
+
+  if (!isWaiting) {
+    // إذا لم يكن النظام في حالة انتظار، تفعل الضوء والبزر
+    digitalWrite(ledPins[currentLedIndex], HIGH);
+    digitalWrite(controlBuzzerPin, HIGH); // تشغيل البزر
+    lcd.setCursor(0, 1);
+    lcd.print("Dosage");
+    lcd.print(currentLedIndex + 1);
+    lcd.print(": NotTaken");
+
+    // تحقق من ضغط الزر المرتبط
+    if (digitalRead(buttonPins[currentLedIndex]) == LOW) {
+      digitalWrite(ledPins[currentLedIndex], LOW); // إطفاء الضوء
+      digitalWrite(controlBuzzerPin, LOW);        // إطفاء البزر
+      lcd.setCursor(0, 1);
+      lcd.print("Dosage");
+      lcd.print(currentLedIndex + 1);
+      lcd.print(" :Taken   ");
+
+      // إعداد الحالة للعد 15 ثانية
+      isWaiting = true;
+      lastActivationTime = currentTime;
+    }
+  } else {
+    // إذا كان النظام في حالة انتظار، تحقق من انتهاء العد
+    if (currentTime - lastActivationTime >= 15000) { // 15 ثانية
+      isWaiting = false;
+      currentLedIndex = (currentLedIndex + 1) % 3; // الانتقال إلى الضوء التالي
+    }
+  }
+
+  delay(100); // تأخير لتخفيف الاهتزازات (debouncing)
+}
